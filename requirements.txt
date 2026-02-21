@@ -1,0 +1,16 @@
+# ADAS — Phase 1 Dependencies
+# Install with:  pip install -r requirements.txt
+
+# ── Core ─────────────────────────────────────────────────────
+# YOLOv8 + PyTorch integration (ultralytics bundles torch dep specs)
+ultralytics>=8.2.0
+
+# Computer vision
+opencv-python>=4.9.0
+
+# Numerical computing (ultralytics pulls this in, listed for clarity)
+numpy>=1.24.0
+
+# ── Optional (uncomment if you add audio alerts later) ───────
+# playsound>=1.3.0
+# pygame>=2.5.0
