@@ -20,6 +20,7 @@ MODEL_PATH = f"models/{MODEL_NAME}"   # cached locally after first download
 POSE_MODEL_NAME = "yolov8n-pose.pt"
 POSE_MODEL_PATH = f"models/{POSE_MODEL_NAME}"
 ENABLE_POSE = True  # draw body keypoints (eyes, nose, shoulders, etc.)
+ENABLE_HANDS = True  # detect hands via MediaPipe
 
 # Custom model path — set to a .pt file to use your own trained model
 # Example: CUSTOM_MODEL_PATH = "models/custom_trained.pt"

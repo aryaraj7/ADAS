@@ -15,6 +15,7 @@ import os
 import cv2
 import numpy as np
 from ultralytics import YOLO
+import mediapipe as mp
 
 import config
 from utils.distance_estimator import estimate_distance
@@ -38,6 +39,7 @@ SKELETON = [
 
 KEYPOINT_COLOR = (0, 255, 255)   # cyan dots
 SKELETON_COLOR = (255, 255, 0)   # yellow limbs
+HAND_COLOR     = (255, 255, 0)   # cyan for hand bounding box
 
 
 class ObjectDetector:
@@ -49,6 +51,7 @@ class ObjectDetector:
     def __init__(self):
         self.model = self._load_model()
         self.pose_model = self._load_pose_model()
+        self.hand_detector = self._load_hand_detector()
         self.class_info = config.DETECTION_CLASSES
         self.target_ids = config.TARGET_CLASS_IDS
         self.detect_all = getattr(config, "DETECT_ALL_CLASSES", False)
@@ -104,6 +107,19 @@ class ObjectDetector:
         model.to(config.DEVICE)
         print(f"[ObjectDetector] Pose model ready")
         return model
+
+    def _load_hand_detector(self):
+        if not getattr(config, "ENABLE_HANDS", True):
+            return None
+        print("[ObjectDetector] Loading MediaPipe Hands …")
+        hands = mp.solutions.hands.Hands(
+            static_image_mode=False,
+            max_num_hands=4,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.4,
+        )
+        print("[ObjectDetector] Hand detector ready")
+        return hands
 
     # ─────────────────────────────────────────
     # Main detection entry point
@@ -185,6 +201,13 @@ class ObjectDetector:
         if self.pose_model is not None:
             self._draw_pose(annotated, frame)
 
+        # Run hand detection (MediaPipe)
+        if self.hand_detector is not None:
+            hand_dets = self._detect_hands(frame, depth_map)
+            for hdet in hand_dets:
+                detections.append(hdet)
+                self._draw_detection(annotated, hdet, HAND_COLOR)
+
         return detections, annotated
 
     # ─────────────────────────────────────────
@@ -222,6 +245,62 @@ class ObjectDetector:
                              (points[a][0], points[a][1]),
                              (points[b][0], points[b][1]),
                              SKELETON_COLOR, 2, cv2.LINE_AA)
+
+    # ─────────────────────────────────────────
+    # Hand detection (MediaPipe)
+    # ─────────────────────────────────────────
+
+    def _detect_hands(self, frame: np.ndarray, depth_map) -> list[dict]:
+        h, w = frame.shape[:2]
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self.hand_detector.process(rgb)
+
+        hand_detections = []
+        if not results.multi_hand_landmarks:
+            return hand_detections
+
+        for hand_landmarks, handedness in zip(
+            results.multi_hand_landmarks, results.multi_handedness
+        ):
+            # Get bounding box from all 21 landmarks
+            xs = [lm.x * w for lm in hand_landmarks.landmark]
+            ys = [lm.y * h for lm in hand_landmarks.landmark]
+            x1 = max(int(min(xs)) - 10, 0)
+            y1 = max(int(min(ys)) - 10, 0)
+            x2 = min(int(max(xs)) + 10, w)
+            y2 = min(int(max(ys)) + 10, h)
+
+            hand_label = handedness.classification[0].label  # "Left" or "Right"
+            confidence = handedness.classification[0].score
+
+            # Distance estimation
+            if depth_map is not None and self.depth_estimator is not None:
+                distance_m = self.depth_estimator.get_distance(depth_map, [x1, y1, x2, y2])
+            else:
+                pixel_height = y2 - y1
+                distance_m = estimate_distance("object", pixel_height)
+            risk = self._risk_level(distance_m)
+
+            # Size estimation
+            size_w, size_h = None, None
+            if distance_m is not None and distance_m > 0:
+                focal = config.FOCAL_LENGTH_PX
+                size_w = round(((x2 - x1) * distance_m) / focal, 2)
+                size_h = round(((y2 - y1) * distance_m) / focal, 2)
+
+            hand_detections.append({
+                "class_id":   -1,
+                "name":       f"Hand ({hand_label})",
+                "category":   "human",
+                "confidence": confidence,
+                "box":        [x1, y1, x2, y2],
+                "distance_m": distance_m,
+                "risk":       risk,
+                "size_w":     size_w,
+                "size_h":     size_h,
+            })
+
+        return hand_detections
 
     # ─────────────────────────────────────────
     # Risk classification

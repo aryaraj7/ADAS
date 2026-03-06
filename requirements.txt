@@ -19,6 +19,9 @@ torchvision>=0.9.0
 # timm — required by MiDaS DPT models (DPT_Large / DPT_Hybrid)
 timm>=0.6.0
 
+# ── Hand Detection ─────────────────────────────────────────────
+mediapipe>=0.10.0
+
 # ── GUI ────────────────────────────────────────────────────────
 customtkinter>=5.2.0
 Pillow>=10.0.0
