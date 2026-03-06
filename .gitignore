@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Models (large binary weights — download on first run)
+models/*.pt
+*.pt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs (regenerated each session)
+logs/*.csv
+
+# IDE
+.vscode/
+.idea/
+
+# Virtual environments
+venv/
+.env/
+
+# Training outputs
+runs/
+datasets/
