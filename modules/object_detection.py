@@ -58,6 +58,8 @@ class ObjectDetector:
 
         # MiDaS depth estimator (loaded only if enabled in config)
         self.depth_estimator = DepthEstimator() if config.USE_MIDAS else None
+        self._frame_count = 0
+        self._cached_depth_map = None
 
     # ─────────────────────────────────────────
     # Model loading
@@ -136,10 +138,14 @@ class ObjectDetector:
         detections = []
         annotated = frame.copy()
 
-        # Run MiDaS once per frame
+        # Run MiDaS every N frames, reuse cached depth map otherwise
         depth_map = None
         if self.depth_estimator is not None:
-            depth_map = self.depth_estimator.estimate(frame)
+            every_n = getattr(config, "MIDAS_EVERY_N_FRAMES", 1)
+            if self._frame_count % every_n == 0:
+                self._cached_depth_map = self.depth_estimator.estimate(frame)
+            depth_map = self._cached_depth_map
+            self._frame_count += 1
 
         if results.boxes is not None and len(results.boxes) > 0:
             # Get YOLO's own class names for unmapped classes
@@ -166,33 +172,12 @@ class ObjectDetector:
                     category = "object"
                     color = (200, 200, 200)
 
-                # Distance estimation
-                if depth_map is not None:
-                    distance_m = self.depth_estimator.get_distance(depth_map, [x1, y1, x2, y2])
-                else:
-                    pixel_height = y2 - y1
-                    distance_m = estimate_distance(category, pixel_height)
-                risk = self._risk_level(distance_m)
-
-                # Real-world size estimation (width × height in metres)
-                size_w, size_h = None, None
-                if distance_m is not None and distance_m > 0:
-                    focal = config.FOCAL_LENGTH_PX
-                    px_w = x2 - x1
-                    px_h = y2 - y1
-                    size_w = round((px_w * distance_m) / focal, 2)
-                    size_h = round((px_h * distance_m) / focal, 2)
-
                 detection = {
                     "class_id":   class_id,
                     "name":       name,
                     "category":   category,
                     "confidence": confidence,
                     "box":        [x1, y1, x2, y2],
-                    "distance_m": distance_m,
-                    "risk":       risk,
-                    "size_w":     size_w,
-                    "size_h":     size_h,
                 }
                 detections.append(detection)
                 self._draw_detection(annotated, detection, color)
@@ -203,7 +188,7 @@ class ObjectDetector:
 
         # Run hand detection (MediaPipe)
         if self.hand_detector is not None:
-            hand_dets = self._detect_hands(frame, depth_map)
+            hand_dets = self._detect_hands(frame)
             for hdet in hand_dets:
                 detections.append(hdet)
                 self._draw_detection(annotated, hdet, HAND_COLOR)
@@ -250,7 +235,7 @@ class ObjectDetector:
     # Hand detection (MediaPipe)
     # ─────────────────────────────────────────
 
-    def _detect_hands(self, frame: np.ndarray, depth_map) -> list[dict]:
+    def _detect_hands(self, frame: np.ndarray) -> list[dict]:
         h, w = frame.shape[:2]
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.hand_detector.process(rgb)
@@ -273,31 +258,12 @@ class ObjectDetector:
             hand_label = handedness.classification[0].label  # "Left" or "Right"
             confidence = handedness.classification[0].score
 
-            # Distance estimation
-            if depth_map is not None and self.depth_estimator is not None:
-                distance_m = self.depth_estimator.get_distance(depth_map, [x1, y1, x2, y2])
-            else:
-                pixel_height = y2 - y1
-                distance_m = estimate_distance("object", pixel_height)
-            risk = self._risk_level(distance_m)
-
-            # Size estimation
-            size_w, size_h = None, None
-            if distance_m is not None and distance_m > 0:
-                focal = config.FOCAL_LENGTH_PX
-                size_w = round(((x2 - x1) * distance_m) / focal, 2)
-                size_h = round(((y2 - y1) * distance_m) / focal, 2)
-
             hand_detections.append({
                 "class_id":   -1,
                 "name":       f"Hand ({hand_label})",
                 "category":   "human",
                 "confidence": confidence,
                 "box":        [x1, y1, x2, y2],
-                "distance_m": distance_m,
-                "risk":       risk,
-                "size_w":     size_w,
-                "size_h":     size_h,
             })
 
         return hand_detections
@@ -322,26 +288,13 @@ class ObjectDetector:
 
     def _draw_detection(self, frame: np.ndarray, det: dict, base_color: tuple) -> None:
         x1, y1, x2, y2 = det["box"]
-
-        risk_colors = {
-            "danger":  (0,   0, 255),
-            "warning": (0, 165, 255),
-            "safe":    (0, 220,   0),
-            "unknown": base_color,
-        }
-        draw_color = risk_colors.get(det["risk"], base_color)
+        draw_color = base_color
 
         cv2.rectangle(frame, (x1, y1), (x2, y2), draw_color, config.BOX_THICKNESS)
 
-        parts = [f"{det['name']}"]
+        parts = [det["name"]]
         if config.SHOW_CONFIDENCE:
             parts.append(f"{det['confidence']:.0%}")
-        if config.SHOW_DISTANCE and det["distance_m"] is not None:
-            parts.append(f"depth:{det['distance_m']:.1f}m")
-        if det.get("size_w") is not None and det.get("size_h") is not None:
-            parts.append(f"size:{det['size_w']:.1f}x{det['size_h']:.1f}m")
-        if config.SHOW_CATEGORY:
-            parts.append(f"[{det['category']}]")
         label = "  ".join(parts)
 
         font      = cv2.FONT_HERSHEY_SIMPLEX

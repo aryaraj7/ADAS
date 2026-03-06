@@ -44,26 +44,15 @@ class AlertSystem:
     def process(self, detections: list[dict]) -> None:
         """
         Call once per frame with the detection list.
-        Handles alerts + logging.
+        Handles logging. Console alerts are now handled by the GUI
+        using ultrasonic sensor distance.
         """
         # Decrement all cooldowns
         for key in list(self._cooldown.keys()):
             if self._cooldown[key] > 0:
                 self._cooldown[key] -= 1
 
-        # Sort by priority then by distance (closest first)
-        priority_order = {cat: i for i, cat in enumerate(config.ALERT_PRIORITY)}
-        sorted_dets = sorted(
-            detections,
-            key=lambda d: (
-                priority_order.get(d["category"], 99),
-                d["distance_m"] if d["distance_m"] is not None else 9999,
-            ),
-        )
-
-        for det in sorted_dets:
-            if config.CONSOLE_ALERTS:
-                self._maybe_alert(det)
+        for det in detections:
             if config.ENABLE_LOGGING:
                 self._log(det)
 
@@ -71,40 +60,6 @@ class AlertSystem:
         """Call when the main loop exits to flush the CSV."""
         if self._csv_file:
             self._csv_file.close()
-
-    # ─────────────────────────────────────────
-    # Console alerting
-    # ─────────────────────────────────────────
-
-    def _maybe_alert(self, det: dict) -> None:
-        """Print an alert if the cooldown has expired."""
-        key = f"{det['name']}_{det['risk']}"
-        if self._cooldown[key] > 0:
-            return
-
-        risk   = det["risk"]
-        dist   = det["distance_m"]
-        name   = det["name"].upper()
-        cat    = det["category"]
-        conf   = det["confidence"]
-
-        color = self._COLORS.get(risk, "")
-        reset = self._COLORS["reset"]
-
-        dist_str = f"{dist:.1f}m" if dist is not None else "??m"
-        ts       = datetime.now().strftime("%H:%M:%S")
-
-        if risk == "danger":
-            msg = (f"{color}[{ts}] ⚠  DANGER  — {name} detected "
-                   f"at ~{dist_str}  ({cat}, conf {conf:.0%}){reset}")
-        elif risk == "warning":
-            msg = (f"{color}[{ts}] ⚡ WARNING — {name} detected "
-                   f"at ~{dist_str}  ({cat}, conf {conf:.0%}){reset}")
-        else:
-            return  # no alert for safe objects
-
-        print(msg)
-        self._cooldown[key] = config.ALERT_COOLDOWN_FRAMES
 
     # ─────────────────────────────────────────
     # CSV logging
@@ -118,7 +73,7 @@ class AlertSystem:
         if not file_exists:
             self._csv_writer.writerow(
                 ["timestamp", "name", "category", "confidence",
-                 "distance_m", "risk", "x1", "y1", "x2", "y2"]
+                 "x1", "y1", "x2", "y2"]
             )
 
     def _log(self, det: dict) -> None:
@@ -130,7 +85,5 @@ class AlertSystem:
             det["name"],
             det["category"],
             f"{det['confidence']:.3f}",
-            det["distance_m"],
-            det["risk"],
             x1, y1, x2, y2,
         ])

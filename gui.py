@@ -18,6 +18,7 @@ from tkinter import filedialog
 
 import config
 from modules.object_detection import ObjectDetector
+from modules.ultrasonic import UltrasonicReader
 from utils.alert_system import AlertSystem
 
 
@@ -44,6 +45,7 @@ class ADASApp(ctk.CTk):
         self._thread: threading.Thread | None = None
         self._detector: ObjectDetector | None = None
         self._alerter: AlertSystem | None = None
+        self._ultrasonic: UltrasonicReader | None = None
         self._video_source = None
         self._alert_count = 0
 
@@ -121,7 +123,7 @@ class ADASApp(ctk.CTk):
 
         # Danger distance
         self._danger_var = ctk.DoubleVar(value=config.DISTANCE_DANGER)
-        self._danger_label = ctk.CTkLabel(panel, text=f"Danger distance: {config.DISTANCE_DANGER:.1f} m")
+        self._danger_label = ctk.CTkLabel(panel, text=f"Ultrasonic danger: {config.DISTANCE_DANGER:.1f} m")
         self._danger_label.pack(anchor="w", padx=12)
         ctk.CTkSlider(
             panel, from_=1.0, to=20.0, variable=self._danger_var,
@@ -130,7 +132,7 @@ class ADASApp(ctk.CTk):
 
         # Warning distance
         self._warn_var = ctk.DoubleVar(value=config.DISTANCE_WARNING)
-        self._warn_label = ctk.CTkLabel(panel, text=f"Warning distance: {config.DISTANCE_WARNING:.1f} m")
+        self._warn_label = ctk.CTkLabel(panel, text=f"Ultrasonic warning: {config.DISTANCE_WARNING:.1f} m")
         self._warn_label.pack(anchor="w", padx=12)
         ctk.CTkSlider(
             panel, from_=5.0, to=50.0, variable=self._warn_var,
@@ -138,12 +140,6 @@ class ADASApp(ctk.CTk):
         ).pack(fill="x", padx=12, pady=(0, 6))
 
         # Checkboxes
-        self._midas_var = ctk.BooleanVar(value=config.USE_MIDAS)
-        ctk.CTkCheckBox(
-            panel, text="MiDaS Depth Estimation", variable=self._midas_var,
-            command=self._on_midas_toggle,
-        ).pack(anchor="w", padx=12, pady=(8, 2))
-
         self._fps_var = ctk.BooleanVar(value=config.SHOW_FPS)
         ctk.CTkCheckBox(
             panel, text="Show FPS", variable=self._fps_var,
@@ -172,7 +168,14 @@ class ADASApp(ctk.CTk):
         self._animal_stat = ctk.CTkLabel(stats_frame, text="Animals:  0", anchor="w")
         self._animal_stat.pack(anchor="w", padx=10, pady=2)
         self._object_stat = ctk.CTkLabel(stats_frame, text="Objects:  0", anchor="w")
-        self._object_stat.pack(anchor="w", padx=10, pady=(2, 8))
+        self._object_stat.pack(anchor="w", padx=10, pady=2)
+
+        # Ultrasonic sensor readout
+        self._ultra_stat = ctk.CTkLabel(
+            stats_frame, text="Ultrasonic: —", anchor="w",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        )
+        self._ultra_stat.pack(anchor="w", padx=10, pady=(6, 8))
 
     def _build_alert_log(self):
         log_frame = ctk.CTkFrame(self, corner_radius=8)
@@ -207,17 +210,12 @@ class ADASApp(ctk.CTk):
     def _on_danger_change(self, val):
         val = round(val, 1)
         config.DISTANCE_DANGER = val
-        self._danger_label.configure(text=f"Danger distance: {val:.1f} m")
+        self._danger_label.configure(text=f"Ultrasonic danger: {val:.1f} m")
 
     def _on_warn_change(self, val):
         val = round(val, 1)
         config.DISTANCE_WARNING = val
-        self._warn_label.configure(text=f"Warning distance: {val:.1f} m")
-
-    def _on_midas_toggle(self):
-        config.USE_MIDAS = self._midas_var.get()
-        if self._running:
-            self._add_alert_text("MiDaS setting changed — restart detection to apply.", "info")
+        self._warn_label.configure(text=f"Ultrasonic warning: {val:.1f} m")
 
     # ─────────────────────────────────────────
     # Start / Stop detection
@@ -250,6 +248,18 @@ class ADASApp(ctk.CTk):
         self._detector = ObjectDetector()
         self._alerter = AlertSystem()
 
+        # Start ultrasonic sensor if enabled
+        if getattr(config, "ENABLE_ULTRASONIC", False):
+            self._ultrasonic = UltrasonicReader(
+                port=getattr(config, "ULTRASONIC_PORT", None),
+                baudrate=getattr(config, "ULTRASONIC_BAUDRATE", 115200),
+            )
+            if self._ultrasonic.start():
+                self._add_alert_text("Ultrasonic sensor connected.", "info")
+            else:
+                self._add_alert_text("Ultrasonic sensor not found — running without it.", "warning")
+                self._ultrasonic = None
+
         self._thread = threading.Thread(target=self._detection_loop, daemon=True)
         self._thread.start()
         self._add_alert_text("Detection started.", "info")
@@ -267,6 +277,10 @@ class ADASApp(ctk.CTk):
         if self._video_source:
             self._video_source.release()
             self._video_source = None
+
+        if self._ultrasonic:
+            self._ultrasonic.stop()
+            self._ultrasonic = None
 
         if self._alerter:
             self._alerter.close()
@@ -311,11 +325,18 @@ class ADASApp(ctk.CTk):
             if elapsed < target_spf:
                 time.sleep(target_spf - elapsed)
 
+            # Read ultrasonic distance
+            ultra_dist_m = -1.0
+            if self._ultrasonic and self._ultrasonic.connected:
+                ultra_dist_m = self._ultrasonic.get_distance_m()
+
             # Draw overlays on annotated frame (reuse main.py helpers)
             if config.SHOW_FPS:
                 _draw_fps(annotated, fps)
             if config.SHOW_LEGEND:
                 _draw_legend(annotated)
+            if ultra_dist_m >= 0:
+                _draw_ultrasonic(annotated, ultra_dist_m)
 
             # Push to GUI (drop old frames if queue full)
             try:
@@ -328,13 +349,13 @@ class ADASApp(ctk.CTk):
                 self._frame_queue.put_nowait(annotated)
 
             try:
-                self._det_queue.put_nowait((detections, fps))
+                self._det_queue.put_nowait((detections, fps, ultra_dist_m))
             except queue.Full:
                 try:
                     self._det_queue.get_nowait()
                 except queue.Empty:
                     pass
-                self._det_queue.put_nowait((detections, fps))
+                self._det_queue.put_nowait((detections, fps, ultra_dist_m))
 
     # ─────────────────────────────────────────
     # GUI polling (main thread)
@@ -348,9 +369,9 @@ class ADASApp(ctk.CTk):
             pass
 
         try:
-            detections, fps = self._det_queue.get_nowait()
-            self._update_stats(detections, fps)
-            self._process_alerts(detections)
+            detections, fps, ultra_dist_m = self._det_queue.get_nowait()
+            self._update_stats(detections, fps, ultra_dist_m)
+            self._process_alerts(detections, ultra_dist_m)
         except queue.Empty:
             pass
 
@@ -374,7 +395,7 @@ class ADASApp(ctk.CTk):
         self._video_label.configure(image=ctk_img, text="")
         self._video_label._ctk_image = ctk_img  # prevent garbage collection
 
-    def _update_stats(self, detections: list[dict], fps: float):
+    def _update_stats(self, detections: list[dict], fps: float, ultra_dist_m: float = -1.0):
         counts = {"human": 0, "vehicle": 0, "animal": 0, "object": 0}
         for d in detections:
             cat = d["category"]
@@ -386,20 +407,40 @@ class ADASApp(ctk.CTk):
         self._animal_stat.configure(text=f"Animals:  {counts['animal']}")
         self._object_stat.configure(text=f"Objects:  {counts['object']}")
 
-    def _process_alerts(self, detections: list[dict]):
-        for det in detections:
-            risk = det["risk"]
-            if risk not in ("danger", "warning"):
-                continue
-            ts = datetime.now().strftime("%H:%M:%S")
-            dist = f"{det['distance_m']:.1f}m" if det["distance_m"] is not None else "??m"
-            size = ""
-            if det.get("size_w") is not None and det.get("size_h") is not None:
-                size = f"  size:{det['size_w']:.1f}x{det['size_h']:.1f}m"
-            icon = "⚠" if risk == "danger" else "⚡"
-            level = risk.upper()
-            msg = f"[{ts}] {icon} {level} — {det['name'].upper()} at ~{dist}{size}  (conf {det['confidence']:.0%})"
-            self._add_alert_text(msg, risk)
+        # Ultrasonic distance
+        if ultra_dist_m >= 0:
+            if ultra_dist_m < 0.3:
+                color = "#f85149"   # red — very close
+            elif ultra_dist_m < 1.0:
+                color = "#d29922"   # orange — warning
+            else:
+                color = "#3fb950"   # green — safe
+            self._ultra_stat.configure(
+                text=f"Ultrasonic: {ultra_dist_m:.2f} m",
+                text_color=color,
+            )
+        else:
+            self._ultra_stat.configure(text="Ultrasonic: —", text_color="gray60")
+
+    def _process_alerts(self, detections: list[dict], ultra_dist_m: float = -1.0):
+        if ultra_dist_m < 0:
+            return  # No ultrasonic reading, no distance alerts
+
+        # Determine risk from ultrasonic distance
+        if ultra_dist_m <= config.DISTANCE_DANGER:
+            risk = "danger"
+        elif ultra_dist_m <= config.DISTANCE_WARNING:
+            risk = "warning"
+        else:
+            return  # safe, no alert needed
+
+        # Alert once per risk level change (not per detection)
+        ts = datetime.now().strftime("%H:%M:%S")
+        icon = "⚠" if risk == "danger" else "⚡"
+        level = risk.upper()
+        obj_names = ", ".join(set(d["name"].upper() for d in detections)) if detections else "OBSTACLE"
+        msg = f"[{ts}] {icon} {level} — {obj_names} at {ultra_dist_m:.2f}m (ultrasonic)"
+        self._add_alert_text(msg, risk)
 
     def _add_alert_text(self, text: str, tag: str = "info"):
         self._alert_box.configure(state="normal")
@@ -458,6 +499,22 @@ def _draw_legend(frame):
         cv2.putText(frame, label, (x_start + 20, y + 12),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (220, 220, 220), 1,
                     cv2.LINE_AA)
+
+
+def _draw_ultrasonic(frame, dist_m: float):
+    if dist_m < 0.3:
+        color = (0, 0, 255)       # red
+        label = f"ULTRASONIC: {dist_m:.2f}m  DANGER"
+    elif dist_m < 1.0:
+        color = (0, 165, 255)     # orange
+        label = f"ULTRASONIC: {dist_m:.2f}m  WARNING"
+    else:
+        color = (0, 220, 0)       # green
+        label = f"ULTRASONIC: {dist_m:.2f}m"
+
+    h = frame.shape[0]
+    cv2.putText(frame, label, (12, h - 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
 
 
 # ─────────────────────────────────────────

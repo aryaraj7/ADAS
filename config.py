@@ -210,9 +210,9 @@ ALERT_PRIORITY = ["human", "animal", "vehicle"]
 # ─────────────────────────────────────────
 
 SHOW_FPS        = True
-SHOW_DISTANCE   = True
+SHOW_DISTANCE   = False
 SHOW_CONFIDENCE = True
-SHOW_CATEGORY   = True
+SHOW_CATEGORY   = False
 
 # Bounding box line thickness
 BOX_THICKNESS = 2
@@ -229,18 +229,36 @@ SHOW_LEGEND = True
 # ─────────────────────────────────────────
 
 # Set True to use MiDaS AI depth instead of bounding-box pinhole model
-USE_MIDAS = True
+USE_MIDAS = False
 
 # MiDaS model variant:
 #   "MiDaS_small"  → fastest, good for CPU (recommended)
-#   "DPT_Hybrid"   → more accurate, slower
+#   "DPT_Hybrid"   → more accurate, ~4x slower (needs GPU for real-time)
 #   "DPT_Large"    → most accurate, very slow on CPU
+# Note: v3.1 models (LeViT, SwinV2, BEiT) need GPU — too slow on CPU
 MIDAS_MODEL_TYPE = "MiDaS_small"
+
+# Run MiDaS every N frames to save CPU (reuse last depth map in between)
+MIDAS_EVERY_N_FRAMES = 3
 
 # Depth range mapping (metres)
 # MiDaS gives relative depth (0=far, 1=close), mapped to this range
 MIDAS_MIN_RANGE = 0.5    # closest distance (metres)
 MIDAS_MAX_RANGE = 20.0   # farthest distance (metres)
+
+
+# ─────────────────────────────────────────
+# ULTRASONIC SENSOR (ESP32 + HC-SR04)
+# ─────────────────────────────────────────
+
+# Enable ultrasonic sensor reading from ESP32 serial
+ENABLE_ULTRASONIC = True
+
+# Serial port — None = auto-detect ESP32 USB, or set manually e.g. "/dev/cu.usbserial-0001"
+ULTRASONIC_PORT = None
+
+# Baud rate (must match ESP32 firmware)
+ULTRASONIC_BAUDRATE = 115200
 
 
 # ─────────────────────────────────────────
